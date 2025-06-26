@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo import MongoClient
-from typing import List
+from typing import List, Dict
 from datetime import datetime
 import os
 import logging
@@ -25,9 +25,9 @@ class BMIRequest(BaseModel):
     height: float
     weight: float
 
-# Pydantic model for response
+# Pydantic model for response (used for validation, but returned as dict)
 class BMIRecord(BaseModel):
-    id: str  # MongoDB uses _id as string (ObjectId)
+    id: str
     name: str
     height: float
     weight: float
@@ -50,7 +50,7 @@ def read_root():
 
 # POST endpoint to store BMI record
 @app.post("/save_bmi")
-def save_bmi(bmi_data: BMIRequest):
+def save_bmi(bmi_data: BMIRequest) -> Dict[str, any]:
     logger.info(f"Received data: {bmi_data}")
     if bmi_data.height <= 0 or bmi_data.weight <= 0:
         raise HTTPException(status_code=400, detail="Height and weight must be positive numbers.")
@@ -72,17 +72,16 @@ def save_bmi(bmi_data: BMIRequest):
     logger.info(f"Inserting record: {new_record}")
     try:
         result = collection.insert_one(new_record)
-        # Ensure id is a string and part of the response dictionary
-        inserted_id = str(result.inserted_id)
-        response_data = {
-            "id": inserted_id,
+        # Create a plain dictionary for the response
+        response_record = {
+            "id": str(result.inserted_id),
             "name": new_record["name"],
             "height": new_record["height"],
             "weight": new_record["weight"],
             "bmi": new_record["bmi"],
             "timestamp": new_record["timestamp"]
         }
-        logger.info(f"Inserted with ID: {inserted_id}")
+        logger.info(f"Inserted with ID: {response_record['id']}")
     except Exception as e:
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -90,7 +89,7 @@ def save_bmi(bmi_data: BMIRequest):
     return {
         "success": True,
         "message": "BMI record saved successfully!",
-        "record": response_data
+        "record": response_record
     }
 
 # GET endpoint to retrieve all BMI records
