@@ -5,6 +5,11 @@ from pymongo import MongoClient
 from typing import List
 from datetime import datetime
 import os
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -46,6 +51,7 @@ def read_root():
 # POST endpoint to store BMI record
 @app.post("/save_bmi")
 def save_bmi(bmi_data: BMIRequest):
+    logger.info(f"Received data: {bmi_data}")
     if bmi_data.height <= 0 or bmi_data.weight <= 0:
         raise HTTPException(status_code=400, detail="Height and weight must be positive numbers.")
     if not bmi_data.name.strip():
@@ -63,14 +69,28 @@ def save_bmi(bmi_data: BMIRequest):
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
-    # Store in MongoDB
-    result = collection.insert_one(new_record)
-    new_record["id"] = str(result.inserted_id)  # Convert ObjectId to string
-    
+    logger.info(f"Inserting record: {new_record}")
+    try:
+        result = collection.insert_one(new_record)
+        # Ensure id is a string and part of the response dictionary
+        inserted_id = str(result.inserted_id)
+        response_data = {
+            "id": inserted_id,
+            "name": new_record["name"],
+            "height": new_record["height"],
+            "weight": new_record["weight"],
+            "bmi": new_record["bmi"],
+            "timestamp": new_record["timestamp"]
+        }
+        logger.info(f"Inserted with ID: {inserted_id}")
+    except Exception as e:
+        logger.error(f"Database error: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
     return {
         "success": True,
         "message": "BMI record saved successfully!",
-        "record": new_record
+        "record": response_data
     }
 
 # GET endpoint to retrieve all BMI records
