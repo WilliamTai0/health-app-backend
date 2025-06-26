@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo import MongoClient
-from typing import List, Dict
+from typing import List
 from datetime import datetime
 import os
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # MongoDB setup
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://bmi_user:<password>@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://bmi-user:000@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority")
 client = MongoClient(MONGO_URI)
 db = client["bmi_db"]
 collection = db["bmi_records"]
@@ -25,7 +25,7 @@ class BMIRequest(BaseModel):
     height: float
     weight: float
 
-# Pydantic model for response (used for validation, but returned as dict)
+# Pydantic model for response
 class BMIRecord(BaseModel):
     id: str
     name: str
@@ -34,8 +34,18 @@ class BMIRecord(BaseModel):
     bmi: float
     timestamp: str
 
+# Response model for the entire save_bmi response
+class SaveBMIResponse(BaseModel):
+    success: bool
+    message: str
+    record: BMIRecord
+
+# Response model for get records endpoints
+class GetRecordsResponse(BaseModel):
+    records: List[BMIRecord]
+
 # CORS setup
-origins = ["http://localhost:19006", "https://your-frontend-url.onrender.com"]
+origins = ["http://localhost:10000", "https://health-app-backend-2is4.onrender.com/"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -49,8 +59,8 @@ def read_root():
     return {"Hello": "World"}
 
 # POST endpoint to store BMI record
-@app.post("/save_bmi")
-def save_bmi(bmi_data: BMIRequest) -> Dict[str, any]:
+@app.post("/save_bmi", response_model=SaveBMIResponse)
+def save_bmi(bmi_data: BMIRequest):
     logger.info(f"Received data: {bmi_data}")
     if bmi_data.height <= 0 or bmi_data.weight <= 0:
         raise HTTPException(status_code=400, detail="Height and weight must be positive numbers.")
@@ -93,7 +103,7 @@ def save_bmi(bmi_data: BMIRequest) -> Dict[str, any]:
     }
 
 # GET endpoint to retrieve all BMI records
-@app.get("/get_all_bmi_records", response_model=dict)
+@app.get("/get_all_bmi_records", response_model=GetRecordsResponse)
 def get_all_bmi_records():
     records = []
     for record in collection.find():
@@ -109,7 +119,7 @@ def get_all_bmi_records():
     return {"records": records}
 
 # GET endpoint to retrieve records by name
-@app.get("/get_bmi_records/{name}", response_model=dict)
+@app.get("/get_bmi_records/{name}", response_model=GetRecordsResponse)
 def get_bmi_records_by_name(name: str):
     records = []
     for record in collection.find({"name": {"$regex": f"^{name}$", "$options": "i"}}):
