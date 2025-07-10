@@ -2,14 +2,13 @@ from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr
+from passlib.context import CryptContext # Present for hashing
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional, Any
 import os
 from dotenv import load_dotenv
-from bson import ObjectId
 
 # Load environment variables
 load_dotenv()
@@ -31,11 +30,12 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") # Present
 security = HTTPBearer()
 
 # MongoDB connection
-MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster"
+# (Make sure your MONGODB_URL is correct and IP access is configured in MongoDB Atlas)
+MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster" # NOTE: Your latest provided URL was 'mongodb+srv://bmi-user:000@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority' - double-check which is correct for your DB
 client = MongoClient(MONGODB_URL)
 db = client.bmi_db
 users_collection = db.users
@@ -50,18 +50,12 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
+# UserResponse - This is the older Pydantic V1 structure, without Field(alias="_id") or model_config
 class UserResponse(BaseModel):
-    id: str = Field(..., alias="_id")
+    id: str
     username: str
     email: EmailStr
     created_at: datetime
-
-    # Pydantic V2 ConfigDict
-    model_config = ConfigDict(
-        populate_by_name=True,
-        arbitrary_types_allowed=True, # Required for ObjectId
-        json_encoders={ObjectId: str}
-    )
 
 class Token(BaseModel):
     access_token: str
@@ -73,7 +67,7 @@ class AuthResponse(BaseModel):
     user: Optional[UserResponse] = None
     token: Optional[str] = None
 
-# Utility functions
+# Utility functions (using bcrypt hashing)
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -116,7 +110,9 @@ async def register(user_data: UserRegister):
         return AuthResponse(success=False, message="Username already exists")
     if get_user_by_email(user_data.email):
         return AuthResponse(success=False, message="Email already registered")
+    
     hashed_password = get_password_hash(user_data.password)
+    
     user_doc = {
         "username": user_data.username,
         "email": user_data.email,
@@ -127,6 +123,7 @@ async def register(user_data: UserRegister):
     if result.inserted_id:
         access_token = create_access_token(data={"sub": user_data.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
         created_user = users_collection.find_one({"_id": result.inserted_id})
+        # Note: This line might cause issues due to MongoDB's ObjectId for '_id' not directly mapping to Pydantic V1 'id: str'
         user_response = UserResponse(id=str(created_user["_id"]), username=created_user["username"], email=created_user["email"], created_at=created_user["created_at"])
         return AuthResponse(success=True, message="User created successfully", user=user_response, token=access_token)
     return AuthResponse(success=False, message="Failed to create user")
@@ -137,11 +134,13 @@ async def login(user_data: UserLogin):
     if not user or not verify_password(user_data.password, user["password"]):
         return AuthResponse(success=False, message="Invalid username or password")
     access_token = create_access_token(data={"sub": user["username"]}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    # Note: This line might cause issues due to MongoDB's ObjectId for '_id' not directly mapping to Pydantic V1 'id: str'
     user_response = UserResponse(id=str(user["_id"]), username=user["username"], email=user["email"], created_at=user["created_at"])
     return AuthResponse(success=True, message="Login successful", user=user_response, token=access_token)
 
 @app.get("/api/auth/me", response_model=UserResponse)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    # Note: This line might cause issues due to MongoDB's ObjectId for '_id' not directly mapping to Pydantic V1 'id: str'
     return UserResponse(id=str(current_user["_id"]), username=current_user["username"], email=current_user["email"], created_at=current_user["created_at"])
 
 @app.get("/api/users")
