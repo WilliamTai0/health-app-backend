@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import Field 
 # REMOVED: from passlib.context import CryptContext # No longer needed for hashing
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
@@ -51,16 +52,16 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(BaseModel):
-    id: str = Field(..., alias="_id")
+    id: str = Field(..., validation_alias="_id") # Use validation_alias instead
     username: str
-    email: EmailStr
-    created_at: datetime
+    email: str
+    created_at: str
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        arbitrary_types_allowed=True,
-        json_encoders={ObjectId: str}
-    )
+    model_config = {
+        "populate_by_name": True,
+        "arbitrary_types_allowed": True,
+        "json_encoders": {ObjectId: str}
+    }
 
 class Token(BaseModel):
     access_token: str
