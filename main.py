@@ -1,135 +1,157 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from pymongo import MongoClient
-from typing import List
-from datetime import datetime
+from pydantic import BaseModel, EmailStr
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from typing import Optional
 import os
-import logging
+from dotenv import load_dotenv
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Load environment variables
+load_dotenv()
 
-app = FastAPI()
+# FastAPI app
+app = FastAPI(title="Health App API", version="1.0.0")
 
-# MongoDB setup
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://bmi-user:000@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority")
-client = MongoClient(MONGO_URI)
-db = client["bmi_db"]
-collection = db["bmi_records"]
-
-# Pydantic model for request body
-class BMIRequest(BaseModel):
-    name: str
-    height: float
-    weight: float
-
-# Pydantic model for response
-class BMIRecord(BaseModel):
-    id: str
-    name: str
-    height: float
-    weight: float
-    bmi: float
-    timestamp: str
-
-# Response model for the entire save_bmi response
-class SaveBMIResponse(BaseModel):
-    success: bool
-    message: str
-    record: BMIRecord
-
-# Response model for get records endpoints
-class GetRecordsResponse(BaseModel):
-    records: List[BMIRecord]
-
-# CORS setup
-origins = ["http://localhost:10000", "https://health-app-backend-2is4.onrender.com/"]
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Specify your app's domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+# Security
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# POST endpoint to store BMI record
-@app.post("/save_bmi", response_model=SaveBMIResponse)
-def save_bmi(bmi_data: BMIRequest):
-    logger.info(f"Received data: {bmi_data}")
-    if bmi_data.height <= 0 or bmi_data.weight <= 0:
-        raise HTTPException(status_code=400, detail="Height and weight must be positive numbers.")
-    if not bmi_data.name.strip():
-        raise HTTPException(status_code=400, detail="Name cannot be empty.")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
 
-    # Calculate BMI
-    bmi = bmi_data.weight / (bmi_data.height * bmi_data.height)
-    
-    # Create record
-    new_record = {
-        "name": bmi_data.name.strip(),
-        "height": bmi_data.height,
-        "weight": bmi_data.weight,
-        "bmi": round(bmi, 2),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    logger.info(f"Inserting record: {new_record}")
+# MongoDB connection
+MONGODB_URL = "mongodb+srv://bmi-user:000@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority"
+client = MongoClient(MONGODB_URL)
+db = client.bmi_db
+users_collection = db.users
+
+# Pydantic models (abbreviated for brevity)
+class UserRegister(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    created_at: datetime
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class AuthResponse(BaseModel):
+    success: bool
+    message: str
+    user: Optional[UserResponse] = None
+    token: Optional[str] = None
+
+# Utility functions (abbreviated)
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_user_by_username(username: str):
+    return users_collection.find_one({"username": username})
+
+def get_user_by_email(email: str):
+    return users_collection.find_one({"email": email})
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        result = collection.insert_one(new_record)
-        # Create a plain dictionary for the response
-        response_record = {
-            "id": str(result.inserted_id),
-            "name": new_record["name"],
-            "height": new_record["height"],
-            "weight": new_record["weight"],
-            "bmi": new_record["bmi"],
-            "timestamp": new_record["timestamp"]
-        }
-        logger.info(f"Inserted with ID: {response_record['id']}")
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        user = get_user_by_username(username)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return user
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    return {
-        "success": True,
-        "message": "BMI record saved successfully!",
-        "record": response_record
+# API Routes
+@app.get("/")
+async def root():
+    return {"message": "Health App API is running", "status": "healthy"}
+
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def register(user_data: UserRegister):
+    if get_user_by_username(user_data.username):
+        return AuthResponse(success=False, message="Username already exists")
+    if get_user_by_email(user_data.email):
+        return AuthResponse(success=False, message="Email already registered")
+    hashed_password = get_password_hash(user_data.password)
+    user_doc = {
+        "username": user_data.username,
+        "email": user_data.email,
+        "password": hashed_password,
+        "created_at": datetime.utcnow()
     }
+    result = users_collection.insert_one(user_doc)
+    if result.inserted_id:
+        access_token = create_access_token(data={"sub": user_data.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+        created_user = users_collection.find_one({"_id": result.inserted_id})
+        user_response = UserResponse(id=str(created_user["_id"]), username=created_user["username"], email=created_user["email"], created_at=created_user["created_at"])
+        return AuthResponse(success=True, message="User created successfully", user=user_response, token=access_token)
+    return AuthResponse(success=False, message="Failed to create user")
 
-# GET endpoint to retrieve all BMI records
-@app.get("/get_all_bmi_records", response_model=GetRecordsResponse)
-def get_all_bmi_records():
-    records = []
-    for record in collection.find():
-        record_dict = {
-            "id": str(record["_id"]),
-            "name": record["name"],
-            "height": record["height"],
-            "weight": record["weight"],
-            "bmi": record["bmi"],
-            "timestamp": record["timestamp"]
-        }
-        records.append(record_dict)
-    return {"records": records}
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(user_data: UserLogin):
+    user = get_user_by_username(user_data.username)
+    if not user or not verify_password(user_data.password, user["password"]):
+        return AuthResponse(success=False, message="Invalid username or password")
+    access_token = create_access_token(data={"sub": user["username"]}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    user_response = UserResponse(id=str(user["_id"]), username=user["username"], email=user["email"], created_at=user["created_at"])
+    return AuthResponse(success=True, message="Login successful", user=user_response, token=access_token)
 
-# GET endpoint to retrieve records by name
-@app.get("/get_bmi_records/{name}", response_model=GetRecordsResponse)
-def get_bmi_records_by_name(name: str):
-    records = []
-    for record in collection.find({"name": {"$regex": f"^{name}$", "$options": "i"}}):
-        record_dict = {
-            "id": str(record["_id"]),
-            "name": record["name"],
-            "height": record["height"],
-            "weight": record["weight"],
-            "bmi": record["bmi"],
-            "timestamp": record["timestamp"]
-        }
-        records.append(record_dict)
-    return {"records": records}
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    return UserResponse(id=str(current_user["_id"]), username=current_user["username"], email=current_user["email"], created_at=current_user["created_at"])
+
+@app.get("/api/users")
+async def get_all_users(current_user: dict = Depends(get_current_user)):
+    users = list(users_collection.find({}, {"password": 0}))
+    for user in users:
+        user["id"] = str(user["_id"])
+        del user["_id"]
+    return {"users": users}
+
+@app.get("/api/health")
+async def health_check():
+    try:
+        client.admin.command('ping')
+        return {"status": "healthy", "database": "connected", "timestamp": datetime.utcnow()}
+    except Exception as e:
+        return {"status": "unhealthy", "database": "disconnected", "error": str(e), "timestamp": datetime.utcnow()}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
