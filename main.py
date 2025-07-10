@@ -34,7 +34,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 # MongoDB connection
-MONGODB_URL = "mongodb+srv://bmi-user:000@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority"
+MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster"
 client = MongoClient(MONGODB_URL)
 db = client.bmi_db
 users_collection = db.users
