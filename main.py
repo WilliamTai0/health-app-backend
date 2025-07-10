@@ -3,16 +3,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from pydantic import Field 
-# REMOVED: from passlib.context import CryptContext # No longer needed for hashing
+from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional, Any
-from bson import ObjectId
 import os
 from dotenv import load_dotenv
+from bson import ObjectId
 
-# Load environment variables (useful for SECRET_KEY even in testing)
+# Load environment variables
 load_dotenv()
 
 # FastAPI app
@@ -21,7 +20,7 @@ app = FastAPI(title="Health App API", version="1.0.0")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Specify your app's domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,11 +31,11 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# REMOVED: pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") # No longer needed
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 # MongoDB connection
-MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster"
+MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority"
 client = MongoClient(MONGODB_URL)
 db = client.bmi_db
 users_collection = db.users
@@ -52,16 +51,17 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(BaseModel):
-    id: str = Field(..., validation_alias="_id") # Use validation_alias instead
+    id: str = Field(..., alias="_id")
     username: str
-    email: str
-    created_at: str
+    email: EmailStr
+    created_at: datetime
 
-    model_config = {
-        "populate_by_name": True,
-        "arbitrary_types_allowed": True,
-        "json_encoders": {ObjectId: str}
-    }
+    # Pydantic V2 ConfigDict
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True, # Required for ObjectId
+        json_encoders={ObjectId: str}
+    )
 
 class Token(BaseModel):
     access_token: str
@@ -73,14 +73,12 @@ class AuthResponse(BaseModel):
     user: Optional[UserResponse] = None
     token: Optional[str] = None
 
-# Utility functions (MODIFIED FOR NO ENCRYPTION)
-def verify_password(plain_password, stored_password):
-    # TEMPORARY: Directly compare plain password with stored plain password
-    return plain_password == stored_password
+# Utility functions
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
-    # TEMPORARY: Return password as is (no hashing)
-    return password
+    return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -118,14 +116,11 @@ async def register(user_data: UserRegister):
         return AuthResponse(success=False, message="Username already exists")
     if get_user_by_email(user_data.email):
         return AuthResponse(success=False, message="Email already registered")
-    
-    # TEMPORARY: Store password as plain text
-    plain_password_to_store = get_password_hash(user_data.password)
-    
+    hashed_password = get_password_hash(user_data.password)
     user_doc = {
         "username": user_data.username,
         "email": user_data.email,
-        "password": plain_password_to_store, # Storing plain password
+        "password": hashed_password,
         "created_at": datetime.utcnow()
     }
     result = users_collection.insert_one(user_doc)
@@ -139,7 +134,6 @@ async def register(user_data: UserRegister):
 @app.post("/api/auth/login", response_model=AuthResponse)
 async def login(user_data: UserLogin):
     user = get_user_by_username(user_data.username)
-    # TEMPORARY: Directly verify plain password
     if not user or not verify_password(user_data.password, user["password"]):
         return AuthResponse(success=False, message="Invalid username or password")
     access_token = create_access_token(data={"sub": user["username"]}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
