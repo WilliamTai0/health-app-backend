@@ -2,13 +2,14 @@ from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, ConfigDict # Added Field, ConfigDict
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Any # Added Any for ObjectId if you don't use a custom type for it
 import os
 from dotenv import load_dotenv
+from bson import ObjectId # Added ObjectId import
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +27,7 @@ app.add_middleware(
 )
 
 # Security
+# It is critical to set SECRET_KEY as an environment variable on Render
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
@@ -34,12 +36,16 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 # MongoDB connection
-MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster"
+# Get MongoDB URL from environment variable for deployment
+MONGODB_URL = os.getenv("MONGODB_URL")
+if not MONGODB_URL:
+    raise ValueError("MONGODB_URL environment variable not set. Please set it on Render or in your local .env file.")
+
 client = MongoClient(MONGODB_URL)
 db = client.bmi_db
 users_collection = db.users
 
-# Pydantic models (abbreviated for brevity)
+# Pydantic models
 class UserRegister(BaseModel):
     username: str
     email: EmailStr
@@ -50,10 +56,18 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(BaseModel):
-    id: str
+    # Pydantic V2: Use Field with alias to map MongoDB's _id to 'id'
+    id: str = Field(..., alias="_id")
     username: str
-    email: str
+    email: EmailStr
     created_at: datetime
+
+    # Pydantic V2: model_config replaces the inner Config class
+    model_config = ConfigDict(
+        populate_by_name=True, # Allows population using the alias, e.g., _id mapping to id
+        arbitrary_types_allowed=True, # Allows types like ObjectId to be passed
+        json_encoders={ObjectId: str} # Tells Pydantic how to serialize ObjectId to string for JSON output
+    )
 
 class Token(BaseModel):
     access_token: str
@@ -65,7 +79,7 @@ class AuthResponse(BaseModel):
     user: Optional[UserResponse] = None
     token: Optional[str] = None
 
-# Utility functions (abbreviated)
+# Utility functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -119,6 +133,7 @@ async def register(user_data: UserRegister):
     if result.inserted_id:
         access_token = create_access_token(data={"sub": user_data.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
         created_user = users_collection.find_one({"_id": result.inserted_id})
+        # Explicitly convert _id to str when creating UserResponse
         user_response = UserResponse(id=str(created_user["_id"]), username=created_user["username"], email=created_user["email"], created_at=created_user["created_at"])
         return AuthResponse(success=True, message="User created successfully", user=user_response, token=access_token)
     return AuthResponse(success=False, message="Failed to create user")
@@ -126,14 +141,17 @@ async def register(user_data: UserRegister):
 @app.post("/api/auth/login", response_model=AuthResponse)
 async def login(user_data: UserLogin):
     user = get_user_by_username(user_data.username)
+    # The password verification happens here
     if not user or not verify_password(user_data.password, user["password"]):
         return AuthResponse(success=False, message="Invalid username or password")
     access_token = create_access_token(data={"sub": user["username"]}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    # Explicitly convert _id to str when creating UserResponse
     user_response = UserResponse(id=str(user["_id"]), username=user["username"], email=user["email"], created_at=user["created_at"])
     return AuthResponse(success=True, message="Login successful", user=user_response, token=access_token)
 
 @app.get("/api/auth/me", response_model=UserResponse)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    # Explicitly convert _id to str when creating UserResponse
     return UserResponse(id=str(current_user["_id"]), username=current_user["username"], email=current_user["email"], created_at=current_user["created_at"])
 
 @app.get("/api/users")
@@ -154,4 +172,6 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    # Use os.getenv("PORT") for Render deployment, default to 10000 for local development
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
