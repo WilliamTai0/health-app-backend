@@ -2,13 +2,14 @@ from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Any
 import os
 from dotenv import load_dotenv
+from bson import ObjectId
 
 # Load environment variables
 load_dotenv()
@@ -34,12 +35,12 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 # MongoDB connection
-MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.berqjbo.mongodb.net/?retryWrites=true&w=majority&appName=bmi-cluster"
+MONGODB_URL = "mongodb+srv://bmi-user:1234@bmi-cluster.mongodb.net/bmi_db?retryWrites=true&w=majority"
 client = MongoClient(MONGODB_URL)
 db = client.bmi_db
 users_collection = db.users
 
-# Pydantic models (abbreviated for brevity)
+# Pydantic models
 class UserRegister(BaseModel):
     username: str
     email: EmailStr
@@ -50,10 +51,17 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(BaseModel):
-    id: str
+    id: str = Field(..., alias="_id")
     username: str
-    email: str
+    email: EmailStr
     created_at: datetime
+
+    # Pydantic V2 ConfigDict
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True, # Required for ObjectId
+        json_encoders={ObjectId: str}
+    )
 
 class Token(BaseModel):
     access_token: str
@@ -65,7 +73,7 @@ class AuthResponse(BaseModel):
     user: Optional[UserResponse] = None
     token: Optional[str] = None
 
-# Utility functions (abbreviated)
+# Utility functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
